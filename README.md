@@ -34,7 +34,7 @@ brew install xz
 
 ```bash
 # Clone this repository
-git clone <your-repo-url>
+git clone https://github.com/ethanzhrepo/rpi-zero-init-scripts
 cd rpi-zero-init-scripts
 
 # Copy example configuration
