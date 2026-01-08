@@ -1,0 +1,117 @@
+#!/bin/bash
+# Telegram Boot Notification Script for Raspberry Pi
+# This script runs on every boot and sends system information to Telegram
+
+# ==============================================================================
+# Configuration
+# ==============================================================================
+TELEGRAM_BOT_TOKEN="{{TELEGRAM_BOT_TOKEN}}"
+TELEGRAM_CHAT_ID="{{TELEGRAM_CHAT_ID}}"
+TELEGRAM_API="https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage"
+
+# ==============================================================================
+# Gather System Information
+# ==============================================================================
+
+# Wait a bit for network to be fully ready
+sleep 10
+
+# Hostname
+HOSTNAME=$(hostname)
+
+# IP Address (first non-loopback IP)
+IP_ADDRESS=$(hostname -I 2>/dev/null | awk '{print $1}')
+if [[ -z "$IP_ADDRESS" ]]; then
+    IP_ADDRESS="No IP assigned"
+fi
+
+# Uptime
+UPTIME=$(uptime -p 2>/dev/null || uptime | awk '{print $3, $4}')
+
+# Memory usage
+MEMORY=$(free -h 2>/dev/null | awk '/^Mem:/ {print $3 "/" $2}')
+if [[ -z "$MEMORY" ]]; then
+    MEMORY="Unknown"
+fi
+
+# Disk usage (root partition)
+DISK=$(df -h / 2>/dev/null | awk 'NR==2 {print $3 "/" $2 " (" $5 ")"}')
+if [[ -z "$DISK" ]]; then
+    DISK="Unknown"
+fi
+
+# WiFi signal strength
+WIFI_SIGNAL=$(iwconfig wlan0 2>/dev/null | grep "Signal level" | sed 's/.*Signal level=\(.*\) dBm.*/\1 dBm/')
+if [[ -z "$WIFI_SIGNAL" ]]; then
+    WIFI_SIGNAL="Not connected"
+fi
+
+# WiFi SSID
+WIFI_SSID=$(iwgetid -r 2>/dev/null)
+if [[ -z "$WIFI_SSID" ]]; then
+    WIFI_SSID="Not connected"
+fi
+
+# CPU temperature (if available)
+CPU_TEMP=$(vcgencmd measure_temp 2>/dev/null | cut -d= -f2)
+if [[ -z "$CPU_TEMP" ]]; then
+    CPU_TEMP="N/A"
+fi
+
+# Boot time
+BOOT_TIME=$(who -b 2>/dev/null | awk '{print $3, $4}')
+if [[ -z "$BOOT_TIME" ]]; then
+    BOOT_TIME=$(date '+%Y-%m-%d %H:%M:%S')
+fi
+
+# ==============================================================================
+# Format Message
+# ==============================================================================
+
+MESSAGE="*Raspberry Pi Boot Notification*
+
+*Hostname:* \`${HOSTNAME}\`
+*IP Address:* \`${IP_ADDRESS}\`
+*WiFi SSID:* ${WIFI_SSID}
+*WiFi Signal:* ${WIFI_SIGNAL}
+
+*Uptime:* ${UPTIME}
+*Memory:* ${MEMORY}
+*Disk:* ${DISK}
+*CPU Temp:* ${CPU_TEMP}
+
+*Boot Time:* ${BOOT_TIME}
+
+_System is ready for SSH access_"
+
+# ==============================================================================
+# Send to Telegram
+# ==============================================================================
+
+# Send message with retry logic
+MAX_RETRIES=3
+RETRY_COUNT=0
+
+while [[ $RETRY_COUNT -lt $MAX_RETRIES ]]; do
+    RESPONSE=$(curl -s -X POST "$TELEGRAM_API" \
+        -d chat_id="$TELEGRAM_CHAT_ID" \
+        -d parse_mode="Markdown" \
+        -d text="$MESSAGE" 2>&1)
+
+    if echo "$RESPONSE" | grep -q '"ok":true'; then
+        # Success
+        echo "Telegram notification sent successfully"
+        exit 0
+    fi
+
+    # Failed, retry
+    ((RETRY_COUNT++))
+    echo "Failed to send Telegram notification (attempt $RETRY_COUNT/$MAX_RETRIES)"
+
+    if [[ $RETRY_COUNT -lt $MAX_RETRIES ]]; then
+        sleep 5
+    fi
+done
+
+echo "Failed to send Telegram notification after $MAX_RETRIES attempts"
+exit 1

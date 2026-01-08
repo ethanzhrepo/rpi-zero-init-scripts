@@ -1,0 +1,18 @@
+# Configuration files with sensitive credentials
+config/config.sh
+
+# Cached images
+cache/images/*.img
+cache/images/*.xz
+cache/images/*.sha256
+
+# Log files
+logs/*.log
+
+# macOS
+.DS_Store
+
+# Temporary files
+*.tmp
+*.swp
+*~
