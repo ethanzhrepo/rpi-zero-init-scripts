@@ -343,11 +343,44 @@ show_disk_info() {
     echo ""
 }
 
-# Find SD card automatically
-find_sd_card() {
-    log_info "Searching for SD card..."
+# Check if disk is SD card candidate
+is_sd_card_candidate() {
+    local disk="$1"
 
-    local candidates=()
+    # Get disk info
+    local disk_info
+    disk_info=$(diskutil info "$disk" 2>/dev/null)
+
+    # Check if removable
+    if ! echo "$disk_info" | grep -q "Removable Media:.*Yes"; then
+        return 1
+    fi
+
+    # Check size is reasonable (1GB - 256GB)
+    local size_bytes
+    size_bytes=$(echo "$disk_info" | grep "Disk Size:" | awk '{print $3}' | sed 's/[^0-9]//g')
+
+    if [[ -n "$size_bytes" ]]; then
+        local size_gb=$((size_bytes / 1000000000))
+
+        if [[ $size_gb -ge 1 && $size_gb -le 256 ]]; then
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+# Find SD card with user selection
+find_sd_card() {
+    log_info "Searching for available disks..."
+
+    # Arrays to store disk information
+    local -a all_disks=()
+    local -a disk_sizes=()
+    local -a disk_names=()
+    local -a disk_types=()
+    local -a is_candidate=()
 
     # List all disks
     local disks
@@ -363,41 +396,125 @@ find_sd_card() {
         local disk_info
         disk_info=$(diskutil info "$disk" 2>/dev/null)
 
-        # Check if removable
-        if echo "$disk_info" | grep -q "Removable Media:.*Yes"; then
-            # Check size is reasonable (1GB - 256GB)
-            local size_bytes
-            size_bytes=$(echo "$disk_info" | grep "Disk Size:" | awk '{print $3}' | sed 's/[^0-9]//g')
-
-            if [[ -n "$size_bytes" ]]; then
-                local size_gb=$((size_bytes / 1000000000))
-
-                if [[ $size_gb -ge 1 && $size_gb -le 256 ]]; then
-                    candidates+=("$disk")
-                fi
-            fi
+        if [[ -z "$disk_info" ]]; then
+            continue
         fi
+
+        # Extract information
+        local size
+        size=$(echo "$disk_info" | grep "Disk Size:" | awk '{print $3, $4}' | xargs)
+        [[ -z "$size" ]] && size="Unknown"
+
+        local name
+        name=$(echo "$disk_info" | grep "Device / Media Name:" | cut -d':' -f2- | xargs)
+        [[ -z "$name" ]] && name="Unknown"
+
+        local removable
+        removable=$(echo "$disk_info" | grep "Removable Media:" | cut -d':' -f2 | xargs)
+
+        local disk_type="Unknown"
+        if [[ "$removable" == "Yes" ]]; then
+            disk_type="Removable"
+        else
+            disk_type="Internal"
+        fi
+
+        # Check if this is an SD card candidate
+        local candidate="No"
+        if is_sd_card_candidate "$disk"; then
+            candidate="Yes"
+        fi
+
+        # Store information
+        all_disks+=("$disk")
+        disk_sizes+=("$size")
+        disk_names+=("$name")
+        disk_types+=("$disk_type")
+        is_candidate+=("$candidate")
     done
 
-    if [[ ${#candidates[@]} -eq 0 ]]; then
-        log_error "No SD card found"
+    # Check if any disks found
+    if [[ ${#all_disks[@]} -eq 0 ]]; then
+        log_error "No removable disks found"
         log_info "Please insert an SD card and try again"
         return 1
-    elif [[ ${#candidates[@]} -eq 1 ]]; then
-        echo "${candidates[0]}"
-        return 0
-    else
-        log_warning "Multiple removable disks found:"
-        for disk in "${candidates[@]}"; do
-            local size
-            size=$(diskutil info "$disk" | grep "Disk Size:" | awk '{print $3, $4}')
-            local name
-            name=$(diskutil info "$disk" | grep "Device / Media Name:" | cut -d':' -f2- | xargs)
-            echo "  $disk - $size - $name"
-        done
-        log_error "Please specify target disk manually in config (TARGET_DISK)"
-        return 1
     fi
+
+    # Display selection menu
+    echo ""
+    echo "═══════════════════════════════════════════════════════════════════════════"
+    echo "                          AVAILABLE DISKS"
+    echo "═══════════════════════════════════════════════════════════════════════════"
+    echo ""
+    printf "  %-4s %-12s %-10s %-12s %-30s\n" "No." "Device" "Size" "Type" "Name"
+    echo "───────────────────────────────────────────────────────────────────────────"
+
+    for i in "${!all_disks[@]}"; do
+        local marker=""
+        local color=""
+
+        if [[ "${is_candidate[$i]}" == "Yes" ]]; then
+            marker="✓ "
+            color="${COLOR_GREEN}"
+        else
+            marker="  "
+            color="${COLOR_YELLOW}"
+        fi
+
+        printf "  ${color}%-4s %-12s %-10s %-12s %-30s${COLOR_RESET}\n" \
+            "$marker$((i + 1))." \
+            "${all_disks[$i]}" \
+            "${disk_sizes[$i]}" \
+            "${disk_types[$i]}" \
+            "${disk_names[$i]}"
+    done
+
+    echo "═══════════════════════════════════════════════════════════════════════════"
+    echo ""
+    echo -e "${COLOR_GREEN}✓${COLOR_RESET} = Recommended (detected as SD card candidate)"
+    echo ""
+
+    # Prompt user for selection
+    local selection
+    while true; do
+        read -p "Select disk number (1-${#all_disks[@]}) or 'q' to quit: " selection
+
+        if [[ "$selection" == "q" || "$selection" == "Q" ]]; then
+            log_info "Selection cancelled by user"
+            return 1
+        fi
+
+        # Validate selection
+        if [[ "$selection" =~ ^[0-9]+$ ]]; then
+            if [[ $selection -ge 1 && $selection -le ${#all_disks[@]} ]]; then
+                break
+            fi
+        fi
+
+        log_error "Invalid selection. Please enter a number between 1 and ${#all_disks[@]}"
+    done
+
+    # Get selected disk
+    local selected_index=$((selection - 1))
+    local selected_disk="${all_disks[$selected_index]}"
+
+    # Warn if selected disk is not a candidate
+    if [[ "${is_candidate[$selected_index]}" != "Yes" ]]; then
+        echo ""
+        log_warning "WARNING: Selected disk is NOT detected as an SD card candidate"
+        log_warning "Disk: $selected_disk (${disk_types[$selected_index]})"
+        log_warning "This may be an internal drive or unsupported device"
+        echo ""
+
+        if ! ask_yes_no "Are you sure you want to use this disk?" "n"; then
+            log_info "Selection cancelled"
+            return 1
+        fi
+    fi
+
+    log_success "Selected disk: $selected_disk"
+    echo "$selected_disk"
+    return 0
 }
 
 # Confirm disk operation with user
