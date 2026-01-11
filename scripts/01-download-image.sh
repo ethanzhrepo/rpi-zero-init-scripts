@@ -49,10 +49,23 @@ resolve_latest_version() {
 get_download_url() {
     local version="$1"
     local version_dir="raspios_lite_armhf-${version}"
+    local dir_url="${BASE_URL}/${version_dir}/"
 
-    # Construct URL
-    local image_url="${BASE_URL}/${version_dir}/${version}-raspios-bookworm-armhf-lite.img.xz"
+    log_debug "Fetching file list from: $dir_url"
 
+    # Fetch directory listing and find the .img.xz file
+    local filename
+    filename=$(curl -s "$dir_url" | grep -oE "${version}-raspios-[a-z]+-armhf-lite\.img\.xz" | head -n1)
+
+    if [[ -z "$filename" ]]; then
+        log_error "Failed to find image file in directory: $dir_url"
+        return 1
+    fi
+
+    log_debug "Found image filename: $filename"
+
+    # Construct full URL
+    local image_url="${BASE_URL}/${version_dir}/${filename}"
     echo "$image_url"
 }
 
@@ -95,6 +108,24 @@ download_file() {
     return 0
 }
 
+# Calculate SHA256 checksum for a file
+calculate_checksum() {
+    local file="$1"
+
+    if command_exists shasum; then
+        shasum -a 256 "$file" | awk '{print $1}'
+        return 0
+    fi
+
+    if command_exists sha256sum; then
+        sha256sum "$file" | awk '{print $1}'
+        return 0
+    fi
+
+    log_error "No SHA256 checksum tool found (shasum or sha256sum)"
+    return 1
+}
+
 # Verify SHA256 checksum
 verify_checksum() {
     local file="$1"
@@ -116,7 +147,9 @@ verify_checksum() {
     log_info "Calculating SHA256 checksum (this may take a moment)..."
 
     local actual_checksum
-    actual_checksum=$(shasum -a 256 "$file" | awk '{print $1}')
+    if ! actual_checksum=$(calculate_checksum "$file"); then
+        return 1
+    fi
 
     log_debug "Actual: $actual_checksum"
 
@@ -140,17 +173,28 @@ extract_xz() {
     log_info "Extracting image..."
     log_info "This may take several minutes..."
 
-    # Check if unxz is available
-    if ! command_exists unxz; then
-        log_error "unxz command not found"
-        log_error "Install with: brew install xz"
-        return 1
-    fi
-
     # Extract to temporary file first
     local temp_file="${output_file}.tmp"
 
-    if ! unxz -c "$xz_file" > "$temp_file"; then
+    if command_exists unxz; then
+        if ! unxz -c "$xz_file" > "$temp_file"; then
+            log_error "Extraction failed"
+            rm -f "$temp_file"
+            return 1
+        fi
+    elif command_exists xz; then
+        if ! xz -dc "$xz_file" > "$temp_file"; then
+            log_error "Extraction failed"
+            rm -f "$temp_file"
+            return 1
+        fi
+    else
+        log_error "xz/unxz command not found"
+        log_error "Install with: brew install xz (macOS) or apt install xz-utils (Linux)"
+        return 1
+    fi
+
+    if [[ ! -f "$temp_file" ]]; then
         log_error "Extraction failed"
         rm -f "$temp_file"
         return 1

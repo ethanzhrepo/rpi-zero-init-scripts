@@ -22,8 +22,17 @@ IMAGE_FILE="${1:-}"
 # Functions
 # ==============================================================================
 
-# Unmount all partitions of a disk
+# Unmount all partitions of a disk (cross-platform wrapper)
 unmount_disk() {
+    if is_macos; then
+        unmount_disk_macos "$@"
+    else
+        unmount_disk_linux "$@"
+    fi
+}
+
+# Unmount all partitions of a disk (macOS)
+unmount_disk_macos() {
     local disk="$1"
 
     log_info "Unmounting disk: $disk"
@@ -35,6 +44,30 @@ unmount_disk() {
     fi
 }
 
+# Unmount all partitions of a disk (Linux)
+unmount_disk_linux() {
+    local disk="$1"
+
+    log_info "Unmounting disk: $disk"
+
+    local mounts
+    mounts=$(lsblk -ln -o MOUNTPOINTS "$disk" 2>/dev/null | awk 'NF {print}' | sort -u)
+
+    if [[ -z "$mounts" ]]; then
+        log_info "No mounted partitions detected"
+        return 0
+    fi
+
+    while read -r mount_point; do
+        [[ -z "$mount_point" ]] && continue
+        if sudo umount "$mount_point" >/dev/null 2>&1; then
+            log_info "Unmounted: $mount_point"
+        else
+            log_warning "Failed to unmount: $mount_point"
+        fi
+    done <<< "$mounts"
+}
+
 # Flash image to disk using dd
 flash_image() {
     local image="$1"
@@ -42,11 +75,24 @@ flash_image() {
 
     log_step "Flashing image to SD card"
 
-    # Use raw device for speed (e.g., /dev/disk4 -> /dev/rdisk4)
-    local rdisk="${disk/\/dev\/disk/\/dev\/rdisk}"
+    local target_device="$disk"
+    if is_macos; then
+        # Use raw device for speed (e.g., /dev/disk4 -> /dev/rdisk4)
+        if [[ "$disk" == /dev/disk* ]]; then
+            target_device="/dev/rdisk${disk#/dev/disk}"
+        fi
+        if [[ ! -e "$target_device" ]]; then
+            log_warning "Raw device not found, falling back to $disk"
+            target_device="$disk"
+        fi
+    fi
 
     log_info "Image: $image"
-    log_info "Target: $disk (using $rdisk for speed)"
+    if is_macos; then
+        log_info "Target: $disk (using $target_device for speed)"
+    else
+        log_info "Target: $disk"
+    fi
 
     # Get image size for progress
     local image_size
@@ -60,27 +106,41 @@ flash_image() {
     if command_exists pv; then
         log_info "Flashing with progress indicator..."
         log_warning "This will take 5-15 minutes depending on SD card speed"
-        echo ""
+        echo "" >&2
 
         # Use pv for progress
-        if ! sudo pv -tpreb "$image" | sudo dd of="$rdisk" bs=4m conv=sync; then
-            log_error "Flashing failed"
-            return 1
+        if is_macos; then
+            if ! sudo pv -tpreb "$image" | sudo dd of="$target_device" bs=4m conv=sync; then
+                log_error "Flashing failed"
+                return 1
+            fi
+        else
+            if ! sudo pv -tpreb "$image" | sudo dd of="$target_device" bs=4M conv=fsync; then
+                log_error "Flashing failed"
+                return 1
+            fi
         fi
     else
         log_info "Flashing without progress indicator (install 'pv' for progress)"
         log_warning "This will take 5-15 minutes depending on SD card speed"
         log_warning "Please be patient, there will be no output until complete"
-        echo ""
+        echo "" >&2
 
         # Use dd without progress
-        if ! sudo dd if="$image" of="$rdisk" bs=4m conv=sync; then
-            log_error "Flashing failed"
-            return 1
+        if is_macos; then
+            if ! sudo dd if="$image" of="$target_device" bs=4m conv=sync; then
+                log_error "Flashing failed"
+                return 1
+            fi
+        else
+            if ! sudo dd if="$image" of="$target_device" bs=4M conv=fsync; then
+                log_error "Flashing failed"
+                return 1
+            fi
         fi
     fi
 
-    echo ""
+    echo "" >&2
     log_info "Syncing filesystem..."
     sync
 
@@ -88,8 +148,17 @@ flash_image() {
     return 0
 }
 
-# Wait for boot partition to mount
+# Wait for boot partition to mount (cross-platform wrapper)
 wait_for_boot_partition() {
+    if is_macos; then
+        wait_for_boot_partition_macos "$@"
+    else
+        wait_for_boot_partition_linux "$@"
+    fi
+}
+
+# Wait for boot partition to mount (macOS)
+wait_for_boot_partition_macos() {
     local disk="$1"
     local max_wait=30
     local waited=0
@@ -141,6 +210,112 @@ wait_for_boot_partition() {
     return 1
 }
 
+# Find boot partition on Linux
+find_boot_partition_linux() {
+    local disk="$1"
+
+    while read -r name type fstype label; do
+        if [[ "$type" != "part" ]]; then
+            continue
+        fi
+
+        if [[ "$label" =~ ^(boot|bootfs)$ ]]; then
+            echo "/dev/$name"
+            return 0
+        fi
+
+        if [[ "$fstype" =~ ^(vfat|fat|msdos)$ ]]; then
+            echo "/dev/$name"
+            return 0
+        fi
+    done < <(lsblk -ln -o NAME,TYPE,FSTYPE,LABEL "$disk" 2>/dev/null)
+}
+
+# Mount boot partition on Linux with user-writable permissions
+mount_boot_partition_linux() {
+    local partition="$1"
+    local mount_point
+    mount_point=$(mktemp -d /tmp/rpi-boot.XXXXXX)
+
+    local fstype
+    fstype=$(lsblk -no FSTYPE "$partition" 2>/dev/null | head -n1 | xargs)
+
+    local uid gid
+    uid=$(id -u)
+    gid=$(id -g)
+
+    local opts=""
+    if [[ "$fstype" =~ ^(vfat|fat|msdos)$ ]]; then
+        opts="uid=${uid},gid=${gid},umask=022"
+    fi
+
+    if [[ -n "$opts" ]]; then
+        if ! sudo mount -o "$opts" "$partition" "$mount_point" >/dev/null 2>&1; then
+            rmdir "$mount_point" 2>/dev/null || true
+            return 1
+        fi
+    else
+        if ! sudo mount "$partition" "$mount_point" >/dev/null 2>&1; then
+            rmdir "$mount_point" 2>/dev/null || true
+            return 1
+        fi
+        sudo chown "$uid:$gid" "$mount_point" >/dev/null 2>&1 || true
+    fi
+
+    echo "$mount_point"
+}
+
+# Wait for boot partition to mount (Linux)
+wait_for_boot_partition_linux() {
+    local disk="$1"
+    local max_wait=30
+    local waited=0
+
+    log_info "Waiting for boot partition to mount..."
+
+    if command_exists partprobe; then
+        sudo partprobe "$disk" >/dev/null 2>&1 || true
+    fi
+    if command_exists udevadm; then
+        udevadm settle >/dev/null 2>&1 || true
+    fi
+    sleep 2
+
+    while [[ $waited -lt $max_wait ]]; do
+        local boot_partition
+        boot_partition=$(find_boot_partition_linux "$disk")
+
+        if [[ -n "$boot_partition" ]]; then
+            local mount_point
+            mount_point=$(lsblk -no MOUNTPOINT "$boot_partition" 2>/dev/null | head -n1 | xargs)
+
+            if [[ -n "$mount_point" ]]; then
+                if [[ -w "$mount_point" ]]; then
+                    log_success "Boot partition mounted at: $mount_point"
+                    echo "$mount_point"
+                    return 0
+                fi
+
+                log_warning "Boot partition mounted but not writable, remounting..."
+                sudo umount "$mount_point" >/dev/null 2>&1 || true
+            fi
+
+            mount_point=$(mount_boot_partition_linux "$boot_partition")
+            if [[ -n "$mount_point" ]]; then
+                log_success "Boot partition mounted at: $mount_point"
+                echo "$mount_point"
+                return 0
+            fi
+        fi
+
+        sleep 1
+        ((waited++))
+    done
+
+    log_error "Failed to mount boot partition"
+    return 1
+}
+
 # Verify boot partition contents
 verify_boot_partition() {
     local mount_point="$1"
@@ -186,24 +361,17 @@ main() {
 
     log_info "Image file: $IMAGE_FILE"
 
-    # Check if running on macOS
-    if ! is_macos; then
-        die "This script only works on macOS"
+    if is_macos; then
+        log_info "Detected macOS"
+    else
+        log_info "Detected Linux"
     fi
 
-    # Find target disk
+    # Find target disk (manual selection)
     local target_disk
-
-    if [[ "${AUTO_DETECT_SD:-true}" == "true" ]]; then
-        log_info "Auto-detecting SD card..."
-        if ! target_disk=$(find_sd_card); then
-            die "Failed to detect SD card"
-        fi
-    else
-        target_disk="${TARGET_DISK:-}"
-        if [[ -z "$target_disk" ]]; then
-            die "TARGET_DISK not set in configuration"
-        fi
+    log_info "Select the target disk (manual selection required)"
+    if ! target_disk=$(find_sd_card); then
+        die "Failed to select SD card"
     fi
 
     log_info "Target disk: $target_disk"

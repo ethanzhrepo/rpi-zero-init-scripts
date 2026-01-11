@@ -33,17 +33,17 @@ fi
 
 # Print info message
 log_info() {
-    echo -e "${COLOR_BLUE}[INFO]${COLOR_RESET} $*"
+    echo -e "${COLOR_BLUE}[INFO]${COLOR_RESET} $*" >&2
 }
 
 # Print success message
 log_success() {
-    echo -e "${COLOR_GREEN}[SUCCESS]${COLOR_RESET} $*"
+    echo -e "${COLOR_GREEN}[SUCCESS]${COLOR_RESET} $*" >&2
 }
 
 # Print warning message
 log_warning() {
-    echo -e "${COLOR_YELLOW}[WARNING]${COLOR_RESET} $*"
+    echo -e "${COLOR_YELLOW}[WARNING]${COLOR_RESET} $*" >&2
 }
 
 # Print error message
@@ -54,15 +54,15 @@ log_error() {
 # Print debug message (only if VERBOSE=true)
 log_debug() {
     if [[ "${VERBOSE:-false}" == "true" ]]; then
-        echo -e "${COLOR_MAGENTA}[DEBUG]${COLOR_RESET} $*"
+        echo -e "${COLOR_MAGENTA}[DEBUG]${COLOR_RESET} $*" >&2
     fi
 }
 
 # Print step header
 log_step() {
-    echo ""
-    echo -e "${COLOR_CYAN}${COLOR_BOLD}==> $*${COLOR_RESET}"
-    echo ""
+    echo "" >&2
+    echo -e "${COLOR_CYAN}${COLOR_BOLD}==> $*${COLOR_RESET}" >&2
+    echo "" >&2
 }
 
 # ==============================================================================
@@ -203,10 +203,10 @@ ask_yes_no() {
     local response
 
     if [[ "$default" == "y" ]]; then
-        read -p "${prompt} [Y/n]: " response
+        read -p "${prompt} [Y/n]: " response </dev/tty >&2
         response=$(to_lower "${response:-y}")
     else
-        read -p "${prompt} [y/N]: " response
+        read -p "${prompt} [y/N]: " response </dev/tty >&2
         response=$(to_lower "${response:-n}")
     fi
 
@@ -219,8 +219,8 @@ require_confirmation() {
     local expected="${2:-YES}"
     local response
 
-    echo -e "${COLOR_YELLOW}${COLOR_BOLD}WARNING:${COLOR_RESET} ${prompt}"
-    read -p "Type '$expected' to confirm: " response
+    echo -e "${COLOR_YELLOW}${COLOR_BOLD}WARNING:${COLOR_RESET} ${prompt}" >&2
+    read -p "Type '$expected' to confirm: " response </dev/tty >&2
 
     if [[ "$response" != "$expected" ]]; then
         log_info "Confirmation failed. Aborted."
@@ -277,7 +277,7 @@ process_template() {
     # This is a simple substitution - for more complex needs, use envsubst
     while IFS= read -r line; do
         # Find all {{VAR}} patterns and replace with their values
-        while [[ "$line" =~ \{\{([A-Z_][A-Z0-9_]*)\}\} ]]; then
+        while [[ "$line" =~ \{\{([A-Z_][A-Z0-9_]*)\}\} ]]; do
             local var_name="${BASH_REMATCH[1]}"
             local var_value="${!var_name}"
             line="${line//\{\{${var_name}\}\}/${var_value}}"
@@ -349,10 +349,12 @@ register_cleanup() {
 # Run all cleanup functions
 run_cleanup() {
     log_debug "Running cleanup functions"
-    for func in "${CLEANUP_FUNCTIONS[@]}"; do
-        log_debug "Running cleanup: $func"
-        $func || log_warning "Cleanup function failed: $func"
-    done
+    if [[ ${#CLEANUP_FUNCTIONS[@]} -gt 0 ]]; then
+        for func in "${CLEANUP_FUNCTIONS[@]}"; do
+            log_debug "Running cleanup: $func"
+            $func || log_warning "Cleanup function failed: $func"
+        done
+    fi
 }
 
 # Set trap to run cleanup on exit

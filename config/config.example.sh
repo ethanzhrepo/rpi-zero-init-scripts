@@ -82,16 +82,10 @@ SSH_PUBLIC_KEY=""
 DISABLE_PASSWORD_AUTH=false
 
 # ==============================================================================
-# SD Card Detection
+# SD Card Selection
 # ==============================================================================
-# Automatically detect SD card
-# Set to false to manually specify target disk below
-AUTO_DETECT_SD=true
-
-# Target disk (only used if AUTO_DETECT_SD=false)
-# WARNING: Be EXTREMELY careful with this setting!
-# Example: /dev/disk4
-# TARGET_DISK="/dev/disk4"
+# Disk selection is always manual. The script will show available disks
+# and highlight SD card candidates for you to choose from.
 
 # ==============================================================================
 # Safety Options

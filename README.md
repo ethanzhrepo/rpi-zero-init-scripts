@@ -207,7 +207,6 @@ HOSTNAME="raspberrypi"          # Set custom hostname
 
 ```bash
 REQUIRE_CONFIRMATION=true       # Require YES to flash
-AUTO_DETECT_SD=true            # Auto-detect SD card
 VERIFY_FLASH=false             # Verify after flash (slow)
 ```
 
@@ -248,10 +247,11 @@ rpi-zero-init-scripts/
 
 **Safety Checks:**
 - Verifies disk is removable/external
-- Checks disk size is reasonable (1-256GB)
+- Checks disk size is reasonable (1-512GB)
 - Ensures not flashing root disk
 - Requires explicit confirmation
-- Uses raw device (`/dev/rdisk`) for 5-10x faster writes
+- If an existing boot partition is detected, requires an extra confirmation
+- Uses raw device on macOS (`/dev/rdisk`) for faster writes
 
 **Flashing Process:**
 - Unmounts all partitions
@@ -304,13 +304,10 @@ RPI_OS_VERSION="2025-12-09"  # Use specific version
 RPI_OS_VERSION="latest"       # Use latest version
 ```
 
-### Manual SD Card Selection
+### SD Card Selection
 
-```bash
-# In config.sh
-AUTO_DETECT_SD=false
-TARGET_DISK="/dev/disk4"  # Specify exact disk
-```
+Disk selection is always manual. The script shows all disks and highlights
+likely SD card candidates so you can choose safely.
 
 ### Skip Telegram Setup
 
@@ -338,9 +335,8 @@ CONFIG_FILE=config/config-pi1.sh ./main.sh
 **Problem:** Script can't find SD card
 
 **Solutions:**
-1. Check SD card is inserted and recognized: `diskutil list`
+1. Check SD card is inserted and recognized: `diskutil list` (macOS) or `lsblk` (Linux)
 2. Try a different SD card reader
-3. Manually specify disk in config: `TARGET_DISK="/dev/disk4"`
 
 ### WiFi Not Connecting
 
@@ -510,7 +506,7 @@ CONFIG_FILE=config/config-pi1.sh ./main.sh
 ## FAQ
 
 **Q: Does this work on Linux or Windows?**
-A: Currently macOS only. The disk operations use macOS-specific `diskutil` commands. Linux and Windows ports are possible but not yet implemented.
+A: macOS and Linux are supported. Windows is not supported yet.
 
 **Q: Can I use Raspberry Pi OS Full instead of Lite?**
 A: Yes, but you'll need to modify the download URL in `scripts/01-download-image.sh`. Change `raspios_lite_armhf` to `raspios_armhf`.
@@ -548,7 +544,7 @@ MIT License - feel free to use and modify for your needs.
 
 ### v1.0.0 (2026-01-07)
 - Initial release
-- macOS support
+- macOS and Linux support
 - Raspberry Pi Zero W support
 - Automated SD card flashing
 - Headless WiFi configuration

@@ -33,8 +33,10 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
     exit 1
 fi
 
-# Source configuration
+# Source configuration and export for sub-scripts
+set -a
 source "$CONFIG_FILE"
+set +a
 
 # Create necessary directories
 ensure_dir "$PROJECT_ROOT/cache/images"
@@ -68,6 +70,62 @@ EOF
 }
 
 # ==============================================================================
+# Configuration Review
+# ==============================================================================
+
+mask_secret() {
+    local value="${1:-}"
+
+    if [[ -z "$value" ]]; then
+        echo "<not set>"
+        return 0
+    fi
+
+    local len=${#value}
+    if [[ $len -le 4 ]]; then
+        echo "****"
+        return 0
+    fi
+
+    local prefix="${value:0:2}"
+    local suffix="${value: -2}"
+    echo "${prefix}***${suffix}"
+}
+
+print_config_summary() {
+    log_info "Configuration (current):"
+    log_info "  Image version: ${RPI_OS_VERSION:-latest}"
+    log_info "  WiFi SSID: ${WIFI_SSID:-<not set>}"
+    log_info "  WiFi password: $(mask_secret "${WIFI_PASSWORD:-}")"
+    log_info "  WiFi country: ${WIFI_COUNTRY_CODE:-<not set>}"
+    log_info "  Hostname: ${HOSTNAME:-raspberrypi}"
+    log_info "  Default user: ${DEFAULT_USER:-pi}"
+    log_info "  DHCP: ${USE_DHCP:-true}"
+
+    if [[ "${USE_DHCP:-true}" != "true" ]]; then
+        log_info "  Static IP: ${STATIC_IP:-<not set>}"
+        log_info "  Gateway: ${STATIC_GATEWAY:-<not set>}"
+        log_info "  DNS: ${STATIC_DNS:-<not set>}"
+    fi
+
+    log_info "  SSH key auth: ${ENABLE_SSH_KEY:-false}"
+    if [[ "${ENABLE_SSH_KEY:-false}" == "true" ]]; then
+        if [[ -n "${SSH_PUBLIC_KEY:-}" ]]; then
+            log_info "  SSH public key: set"
+        else
+            log_info "  SSH public key: <not set>"
+        fi
+        log_info "  Disable password auth: ${DISABLE_PASSWORD_AUTH:-false}"
+    fi
+
+    log_info "  Telegram: ${ENABLE_TELEGRAM:-false}"
+    if [[ "${ENABLE_TELEGRAM:-false}" == "true" ]]; then
+        log_info "  Telegram bot token: $(mask_secret "${TELEGRAM_BOT_TOKEN:-}")"
+        log_info "  Telegram chat ID: ${TELEGRAM_CHAT_ID:-<not set>}"
+    fi
+}
+
+# ==============================================================================
 # Main Process
 # ==============================================================================
 
@@ -98,7 +156,24 @@ main() {
     fi
 
     # ==============================================================================
-    # Step 1: Validate Configuration
+    # Step 1: Review Configuration
+    # ==============================================================================
+
+    log_step "Review Configuration"
+    print_config_summary
+    echo "" >&2
+
+    if ! ask_yes_no "Use the configuration above?" "y"; then
+        log_warning "Configuration review declined"
+        log_info "Edit your configuration at:"
+        log_info "  $CONFIG_FILE"
+        log_info "Then re-run:"
+        log_info "  ./main.sh"
+        exit 1
+    fi
+
+    # ==============================================================================
+    # Step 2: Validate Configuration
     # ==============================================================================
 
     if ! validate_config; then
@@ -133,7 +208,7 @@ main() {
 
     log_warning "This step requires sudo privileges to write to disk"
     log_warning "You will be prompted for your password"
-    echo ""
+    echo "" >&2
 
     local boot_partition
     boot_partition=$(bash "$PROJECT_ROOT/scripts/02-flash-sd-card.sh" "$image_path")
@@ -171,14 +246,10 @@ main() {
     log_step "Step 4/4: Setup Telegram Notifications"
 
     if [[ "${ENABLE_TELEGRAM:-false}" == "true" ]]; then
-        bash "$PROJECT_ROOT/scripts/04-inject-boot-script.sh" "$boot_partition"
-        exit_code=$?
-
-        if [[ $exit_code -ne 0 ]]; then
-            log_warning "Telegram script injection failed, but continuing"
-        else
-            log_success "Telegram notifications configured"
+        if ! bash "$PROJECT_ROOT/scripts/04-inject-boot-script.sh" "$boot_partition"; then
+            die "Failed to configure Telegram notifications"
         fi
+        log_success "Telegram notifications configured"
     else
         log_info "Telegram notifications disabled"
     fi
@@ -193,21 +264,25 @@ main() {
     local minutes=$((duration / 60))
     local seconds=$((duration % 60))
 
-    echo ""
-    echo "╔══════════════════════════════════════════════════════════════════╗"
-    echo "║                                                                  ║"
-    echo "║                    SETUP COMPLETE!                               ║"
-    echo "║                                                                  ║"
-    echo "╚══════════════════════════════════════════════════════════════════╝"
-    echo ""
+    echo "" >&2
+    echo "╔══════════════════════════════════════════════════════════════════╗" >&2
+    echo "║                                                                  ║" >&2
+    echo "║                    SETUP COMPLETE!                               ║" >&2
+    echo "║                                                                  ║" >&2
+    echo "╚══════════════════════════════════════════════════════════════════╝" >&2
+    echo "" >&2
 
     log_success "SD card preparation complete in ${minutes}m ${seconds}s"
-    echo ""
+    echo "" >&2
 
     log_info "Next steps:"
     log_info ""
     log_info "  1. Eject the SD card:"
-    log_info "     diskutil eject $boot_partition"
+    if is_macos; then
+        log_info "     diskutil eject $boot_partition"
+    else
+        log_info "     umount $boot_partition"
+    fi
     log_info ""
     log_info "  2. Insert SD card into your Raspberry Pi Zero W"
     log_info ""
@@ -240,7 +315,7 @@ main() {
         fi
     fi
 
-    echo ""
+    echo "" >&2
     log_info "Configuration:"
     log_info "  WiFi Network: ${WIFI_SSID}"
     log_info "  Hostname: ${HOSTNAME:-raspberrypi}"
@@ -256,7 +331,7 @@ main() {
         fi
     fi
 
-    echo ""
+    echo "" >&2
     log_warning "SECURITY REMINDER:"
     if [[ "${ENABLE_SSH_KEY:-false}" != "true" ]]; then
         log_warning "Change the default password after first login:"
@@ -268,10 +343,10 @@ main() {
             log_warning "  Set DISABLE_PASSWORD_AUTH=true in config"
         fi
     fi
-    echo ""
+    echo "" >&2
 
     log_info "Log saved to: $LOG_FILE"
-    echo ""
+    echo "" >&2
 }
 
 # ==============================================================================
@@ -282,10 +357,10 @@ cleanup() {
     local exit_code=$?
 
     if [[ $exit_code -ne 0 ]]; then
-        echo ""
+        echo "" >&2
         log_error "Script failed with exit code: $exit_code"
         log_info "Check the log file for details: $LOG_FILE"
-        echo ""
+        echo "" >&2
     fi
 }
 
