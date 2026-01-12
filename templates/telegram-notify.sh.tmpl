@@ -13,20 +13,42 @@ TELEGRAM_API="https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage"
 # Gather System Information
 # ==============================================================================
 
-# Wait a bit for network to be fully ready
-sleep 10
+# Wait for network to be ready (up to 60s)
+wait_for_network() {
+    local timeout=60
+    local waited=0
+
+    while [[ $waited -lt $timeout ]]; do
+        if ip route 2>/dev/null | grep -q '^default '; then
+            return 0
+        fi
+        sleep 1
+        ((waited++))
+    done
+
+    return 1
+}
+
+sleep 5
+wait_for_network || true
 
 # Hostname
 HOSTNAME=$(hostname)
 
-# IP Address (first non-loopback IP)
-IP_ADDRESS=$(hostname -I 2>/dev/null | awk '{print $1}')
+# IP Address (all non-loopback IPs)
+IP_ADDRESS=$(hostname -I 2>/dev/null | xargs)
 if [[ -z "$IP_ADDRESS" ]]; then
     IP_ADDRESS="No IP assigned"
 fi
 
 # Uptime
 UPTIME=$(uptime -p 2>/dev/null || uptime | awk '{print $3, $4}')
+
+# Load average
+LOAD_AVG=$(awk '{print $1, $2, $3}' /proc/loadavg 2>/dev/null)
+if [[ -z "$LOAD_AVG" ]]; then
+    LOAD_AVG="Unknown"
+fi
 
 # Memory usage
 MEMORY=$(free -h 2>/dev/null | awk '/^Mem:/ {print $3 "/" $2}')
@@ -54,6 +76,9 @@ fi
 
 # CPU temperature (if available)
 CPU_TEMP=$(vcgencmd measure_temp 2>/dev/null | cut -d= -f2)
+if [[ -z "$CPU_TEMP" && -f /sys/class/thermal/thermal_zone0/temp ]]; then
+    CPU_TEMP="$(awk '{printf "%.1fC", $1/1000}' /sys/class/thermal/thermal_zone0/temp)"
+fi
 if [[ -z "$CPU_TEMP" ]]; then
     CPU_TEMP="N/A"
 fi
@@ -64,18 +89,42 @@ if [[ -z "$BOOT_TIME" ]]; then
     BOOT_TIME=$(date '+%Y-%m-%d %H:%M:%S')
 fi
 
+# OS info
+OS_NAME=$(awk -F= '/^PRETTY_NAME=/ {print $2}' /etc/os-release 2>/dev/null | tr -d '"')
+if [[ -z "$OS_NAME" ]]; then
+    OS_NAME="Unknown"
+fi
+
+# Kernel
+KERNEL_VERSION=$(uname -r 2>/dev/null || echo "Unknown")
+
+# Model
+MODEL=$(tr -d '\0' </proc/device-tree/model 2>/dev/null)
+if [[ -z "$MODEL" ]]; then
+    MODEL=$(awk -F: '/Model/ {print $2; exit}' /proc/cpuinfo 2>/dev/null | xargs)
+fi
+if [[ -z "$MODEL" ]]; then
+    MODEL="Unknown"
+fi
+
 # ==============================================================================
 # Format Message
 # ==============================================================================
 
 MESSAGE="*Raspberry Pi Boot Notification*
 
+*Status:* \`Online\`
 *Hostname:* \`${HOSTNAME}\`
 *IP Address:* \`${IP_ADDRESS}\`
+*Model:* \`${MODEL}\`
+*OS:* \`${OS_NAME}\`
+*Kernel:* \`${KERNEL_VERSION}\`
+
 *WiFi SSID:* ${WIFI_SSID}
 *WiFi Signal:* ${WIFI_SIGNAL}
 
 *Uptime:* ${UPTIME}
+*Load:* ${LOAD_AVG}
 *Memory:* ${MEMORY}
 *Disk:* ${DISK}
 *CPU Temp:* ${CPU_TEMP}

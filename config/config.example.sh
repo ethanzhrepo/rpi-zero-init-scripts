@@ -66,6 +66,12 @@ HOSTNAME="raspberrypi"
 # Default username (usually 'pi' for Raspberry Pi OS)
 DEFAULT_USER="pi"
 
+# User password for headless setup (required for Bookworm images)
+# Provide either USER_PASSWORD (plain text) or USER_PASSWORD_HASH (SHA-512 crypt)
+# Generate hash with: openssl passwd -6
+USER_PASSWORD=""
+# USER_PASSWORD_HASH="$6$..."
+
 # ==============================================================================
 # SSH Configuration
 # ==============================================================================
@@ -80,6 +86,13 @@ SSH_PUBLIC_KEY=""
 # Disable password authentication after setting up key (recommended)
 # WARNING: Make sure your SSH key works before enabling this!
 DISABLE_PASSWORD_AUTH=false
+
+# ==============================================================================
+# Headless Boot Configuration
+# ==============================================================================
+# Use custom.toml for Bookworm+ headless configuration (recommended)
+# Set to false for legacy wpa_supplicant.conf behavior
+USE_CUSTOM_TOML=true
 
 # ==============================================================================
 # SD Card Selection

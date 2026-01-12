@@ -59,6 +59,10 @@ ENABLE_TELEGRAM=true
 TELEGRAM_BOT_TOKEN="your-bot-token-here"
 TELEGRAM_CHAT_ID="your-chat-id-here"
 
+# User (required for Bookworm headless)
+DEFAULT_USER="pi"
+USER_PASSWORD="your-login-password"
+
 # SSH Key (optional but highly recommended)
 ENABLE_SSH_KEY=true
 SSH_PUBLIC_KEY="ssh-rsa AAAAB3NzaC1yc... user@hostname"
@@ -99,7 +103,7 @@ The script will:
 4. Wait 2-3 minutes for first boot
 5. Receive Telegram notification with IP address (if enabled)
 6. SSH into your Pi: `ssh pi@<ip-address>`
-   - Default password: `raspberry`
+   - Password: `USER_PASSWORD` from your config
 
 ## Configuration Options
 
@@ -111,11 +115,26 @@ WIFI_PASSWORD="MyPassword"       # Your WiFi password
 WIFI_COUNTRY_CODE="US"           # ISO 3166-1 alpha-2 code
 ```
 
+### User Settings (Bookworm)
+
+```bash
+DEFAULT_USER="pi"                # Login username
+USER_PASSWORD="your-password"    # Login password (plain text)
+USER_PASSWORD_HASH="$6$..."      # Optional: SHA-512 crypt hash
+```
+
 ### Network Configuration
 
 **DHCP (Recommended):**
 ```bash
 USE_DHCP=true
+```
+
+### Headless Boot Configuration
+
+```bash
+# Use custom.toml for Bookworm+ headless config (recommended)
+USE_CUSTOM_TOML=true
 ```
 
 **Static IP:**
@@ -263,9 +282,13 @@ rpi-zero-init-scripts/
 
 Creates configuration files in the boot partition (FAT32):
 
-**wpa_supplicant.conf:**
+**custom.toml (Bookworm+):**
+- WiFi credentials, SSH settings, and user creation
+- Applied by Raspberry Pi OS first-boot handler
+
+**wpa_supplicant.conf (legacy):**
 - WiFi credentials and country code
-- Raspberry Pi OS automatically moves this to `/etc/wpa_supplicant/`
+- Used only when `USE_CUSTOM_TOML=false`
 
 **ssh:**
 - Empty file enables SSH daemon
@@ -347,7 +370,8 @@ CONFIG_FILE=config/config-pi1.sh ./main.sh
 2. Check country code is correct for your region
 3. Try a simpler password (avoid special characters)
 4. Check WiFi is 2.4GHz (Pi Zero W doesn't support 5GHz)
-5. SSH via Ethernet adapter and check: `sudo journalctl -u wpa_supplicant`
+5. On Bookworm, `wpa_supplicant.conf` in boot is ignored; use `custom.toml` (default here)
+6. SSH via Ethernet adapter and check: `sudo journalctl -u wpa_supplicant`
 
 ### SSH Connection Issues
 
@@ -356,7 +380,7 @@ CONFIG_FILE=config/config-pi1.sh ./main.sh
 **Solutions:**
 1. Wait 2-3 minutes after first boot for SSH to start
 2. Verify Pi is connected to network (check router or use Telegram notification)
-3. Try password: `raspberry` (default)
+3. Try the password you set in `USER_PASSWORD`
 4. Check SSH is enabled: look for `ssh` file in boot partition before booting
 5. Verify firewall settings on your Mac
 
@@ -386,7 +410,7 @@ CONFIG_FILE=config/config-pi1.sh ./main.sh
    ```
 5. If password auth is disabled and key doesn't work:
    - You'll need physical access
-   - Mount SD card and remove `/boot/disable-password-auth`
+   - Mount SD card and remove `/boot/firmware/disable-password-auth`
    - Or edit `/etc/ssh/sshd_config` on the SD card's root partition
 
 **Locked Out (Password auth disabled, key not working):**

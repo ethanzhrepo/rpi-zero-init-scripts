@@ -68,6 +68,16 @@ create_bootstrap_installer() {
 
 set -euo pipefail
 
+BOOT_DIR=""
+if [[ -d /boot/firmware ]]; then
+    BOOT_DIR="/boot/firmware"
+elif [[ -d /boot ]]; then
+    BOOT_DIR="/boot"
+else
+    echo "Boot directory not found" >&2
+    exit 1
+fi
+
 LOG_FILE="/var/log/telegram-bootstrap.log"
 
 log() {
@@ -84,7 +94,7 @@ fi
 
 # Copy notification script to final location
 log "Installing Telegram notification script..."
-cp /boot/telegram-notify.sh /usr/local/bin/telegram-notify.sh
+cp "$BOOT_DIR/telegram-notify.sh" /usr/local/bin/telegram-notify.sh
 chmod +x /usr/local/bin/telegram-notify.sh
 
 # Create systemd service
@@ -98,7 +108,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/telegram-notify.sh
-User=pi
+User=root
 StandardOutput=journal
 StandardError=journal
 
@@ -120,7 +130,7 @@ touch /var/lib/telegram-notify-installed
 
 # Clean up bootstrap files
 log "Cleaning up bootstrap files..."
-rm -f /boot/telegram-bootstrap.sh
+rm -f "$BOOT_DIR/telegram-bootstrap.sh"
 
 log "=== Telegram Bootstrap Installer Complete ==="
 INSTALLER_EOF
@@ -146,7 +156,7 @@ Before=getty@tty1.service
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash /boot/telegram-bootstrap.sh
+ExecStart=/bin/bash -c 'if [ -f /boot/firmware/telegram-bootstrap.sh ]; then exec /bin/bash /boot/firmware/telegram-bootstrap.sh; elif [ -f /boot/telegram-bootstrap.sh ]; then exec /bin/bash /boot/telegram-bootstrap.sh; fi'
 RemainAfterExit=yes
 StandardOutput=journal
 StandardError=journal
@@ -174,7 +184,10 @@ create_firstboot_marker() {
         cat >> "$firstboot_script" << 'EOF'
 
 # Run Telegram bootstrap
-if [[ -f /boot/telegram-bootstrap.sh ]]; then
+if [[ -f /boot/firmware/telegram-bootstrap.sh ]]; then
+    log "Running Telegram bootstrap..."
+    bash /boot/firmware/telegram-bootstrap.sh
+elif [[ -f /boot/telegram-bootstrap.sh ]]; then
     log "Running Telegram bootstrap..."
     bash /boot/telegram-bootstrap.sh
 fi
@@ -194,7 +207,10 @@ log() {
 log "=== First Boot Setup Started ==="
 
 # Run Telegram bootstrap
-if [[ -f /boot/telegram-bootstrap.sh ]]; then
+if [[ -f /boot/firmware/telegram-bootstrap.sh ]]; then
+    log "Running Telegram bootstrap..."
+    bash /boot/firmware/telegram-bootstrap.sh
+elif [[ -f /boot/telegram-bootstrap.sh ]]; then
     log "Running Telegram bootstrap..."
     bash /boot/telegram-bootstrap.sh
 fi
@@ -220,7 +236,9 @@ create_rc_local_integration() {
 # Telegram Bootstrap Integration
 # Add this to /etc/rc.local before "exit 0"
 
-if [ -f /boot/telegram-bootstrap.sh ]; then
+if [ -f /boot/firmware/telegram-bootstrap.sh ]; then
+    /bin/bash /boot/firmware/telegram-bootstrap.sh
+elif [ -f /boot/telegram-bootstrap.sh ]; then
     /bin/bash /boot/telegram-bootstrap.sh
 fi
 EOF
@@ -255,7 +273,7 @@ your Raspberry Pi boots for the first time:
    ssh pi@<your-pi-ip-address>
 
 2. Run the bootstrap installer:
-   sudo bash /boot/telegram-bootstrap.sh
+   sudo bash /boot/firmware/telegram-bootstrap.sh
 
 3. Verify installation:
    sudo systemctl status telegram-notify.service

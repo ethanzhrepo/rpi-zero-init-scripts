@@ -21,10 +21,130 @@ TEMPLATE_DIR="$PROJECT_ROOT/templates"
 # Functions
 # ==============================================================================
 
+# Escape values for TOML double-quoted strings
+toml_escape() {
+    local value="$1"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    printf '%s' "$value"
+}
+
+get_user_password_hash() {
+    if [[ -n "${USER_PASSWORD_HASH:-}" ]]; then
+        echo "$USER_PASSWORD_HASH"
+        return 0
+    fi
+
+    if [[ -z "${USER_PASSWORD:-}" ]]; then
+        log_error "USER_PASSWORD or USER_PASSWORD_HASH is required for headless setup"
+        return 1
+    fi
+
+    if ! command_exists openssl; then
+        log_error "openssl is required to hash USER_PASSWORD"
+        return 1
+    fi
+
+    openssl passwd -6 "$USER_PASSWORD"
+}
+
+# Create custom.toml for Raspberry Pi OS Bookworm+ headless setup
+create_custom_toml() {
+    local boot_mount="$1"
+
+    if [[ "${USE_CUSTOM_TOML:-true}" != "true" ]]; then
+        log_info "USE_CUSTOM_TOML=false, skipping custom.toml"
+        return 0
+    fi
+
+    local custom_file="$boot_mount/custom.toml"
+    local hostname="${HOSTNAME:-raspberrypi}"
+    local default_user="${DEFAULT_USER:-pi}"
+
+    if [[ "${DISABLE_PASSWORD_AUTH:-false}" == "true" ]]; then
+        if [[ "${ENABLE_SSH_KEY:-false}" != "true" || -z "${SSH_PUBLIC_KEY:-}" ]]; then
+            log_error "DISABLE_PASSWORD_AUTH=true requires SSH_PUBLIC_KEY"
+            return 1
+        fi
+    fi
+
+    local password_hash
+    password_hash=$(get_user_password_hash) || return 1
+
+    local password_auth="true"
+    if [[ "${DISABLE_PASSWORD_AUTH:-false}" == "true" ]]; then
+        password_auth="false"
+    fi
+
+    local authorized_keys="[]"
+    if [[ "${ENABLE_SSH_KEY:-false}" == "true" && -n "${SSH_PUBLIC_KEY:-}" ]]; then
+        authorized_keys="[\"$(toml_escape "$SSH_PUBLIC_KEY")\"]"
+    fi
+
+    cat > "$custom_file" << EOF
+config_version = 1
+
+[system]
+hostname = "$(toml_escape "$hostname")"
+
+[user]
+name = "$(toml_escape "$default_user")"
+password = "$(toml_escape "$password_hash")"
+password_encrypted = true
+
+[ssh]
+enabled = true
+password_authentication = ${password_auth}
+authorized_keys = ${authorized_keys}
+
+[wlan]
+ssid = "$(toml_escape "$WIFI_SSID")"
+password = "$(toml_escape "$WIFI_PASSWORD")"
+password_encrypted = false
+country = "$(toml_escape "$WIFI_COUNTRY_CODE")"
+EOF
+
+    log_success "custom.toml created: $custom_file"
+    return 0
+}
+
+# Ensure firstboot handler is enabled when using custom.toml
+configure_firstboot_cmdline() {
+    local boot_mount="$1"
+
+    if [[ "${USE_CUSTOM_TOML:-true}" != "true" ]]; then
+        return 0
+    fi
+
+    local cmdline_file="$boot_mount/cmdline.txt"
+    if [[ ! -f "$cmdline_file" ]]; then
+        log_error "cmdline.txt not found: $cmdline_file"
+        return 1
+    fi
+
+    if grep -q "init=/usr/lib/raspberrypi-sys-mods/firstboot" "$cmdline_file"; then
+        log_debug "cmdline already configured for firstboot"
+        return 0
+    fi
+
+    local cmdline
+    cmdline=$(<"$cmdline_file")
+    cmdline="${cmdline} init=/usr/lib/raspberrypi-sys-mods/firstboot"
+    printf '%s\n' "$cmdline" > "$cmdline_file"
+
+    log_success "Enabled firstboot handler in cmdline.txt"
+    return 0
+}
+
 # Create wpa_supplicant.conf for WiFi
 create_wpa_supplicant() {
     local boot_mount="$1"
     local output_file="$boot_mount/wpa_supplicant.conf"
+
+    if [[ "${USE_CUSTOM_TOML:-true}" == "true" ]]; then
+        log_info "custom.toml enabled, skipping wpa_supplicant.conf"
+        return 0
+    fi
 
     log_info "Creating WiFi configuration..."
 
@@ -195,6 +315,16 @@ create_firstboot_setup() {
 
 set -euo pipefail
 
+BOOT_DIR=""
+if [[ -d /boot/firmware ]]; then
+    BOOT_DIR="/boot/firmware"
+elif [[ -d /boot ]]; then
+    BOOT_DIR="/boot"
+else
+    echo "Boot directory not found" >&2
+    exit 1
+fi
+
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a /var/log/firstboot-setup.log
 }
@@ -217,14 +347,14 @@ if [[ -n "$HOSTNAME" && "$HOSTNAME" != "raspberrypi" ]]; then
 fi
 
 # Configure static IP if dhcpcd.conf exists in boot partition
-if [[ -f /boot/dhcpcd.conf ]]; then
+if [[ -f "$BOOT_DIR/dhcpcd.conf" ]]; then
     log "Applying static IP configuration"
-    cat /boot/dhcpcd.conf >> /etc/dhcpcd.conf
-    rm /boot/dhcpcd.conf
+    cat "$BOOT_DIR/dhcpcd.conf" >> /etc/dhcpcd.conf
+    rm "$BOOT_DIR/dhcpcd.conf"
 fi
 
 # Setup SSH public key authentication
-if [[ -f /boot/authorized_keys ]]; then
+if [[ -f "$BOOT_DIR/authorized_keys" ]]; then
     log "Setting up SSH public key authentication"
 
     # Get default user (usually 'pi')
@@ -236,18 +366,18 @@ if [[ -f /boot/authorized_keys ]]; then
     chmod 700 "$USER_HOME/.ssh"
 
     # Install authorized_keys
-    cat /boot/authorized_keys > "$USER_HOME/.ssh/authorized_keys"
+    cat "$BOOT_DIR/authorized_keys" > "$USER_HOME/.ssh/authorized_keys"
     chmod 600 "$USER_HOME/.ssh/authorized_keys"
     chown -R "$DEFAULT_USER:$DEFAULT_USER" "$USER_HOME/.ssh"
 
     # Remove the file from boot partition
-    rm /boot/authorized_keys
+    rm "$BOOT_DIR/authorized_keys"
 
     log "SSH public key installed for user: $DEFAULT_USER"
 fi
 
 # Disable password authentication if requested
-if [[ -f /boot/disable-password-auth ]]; then
+if [[ -f "$BOOT_DIR/disable-password-auth" ]]; then
     log "Disabling SSH password authentication"
 
     # Backup original config
@@ -264,21 +394,27 @@ if [[ -f /boot/disable-password-auth ]]; then
     # Restart SSH service
     systemctl restart sshd || systemctl restart ssh
 
-    rm /boot/disable-password-auth
+    rm "$BOOT_DIR/disable-password-auth"
 
     log "Password authentication disabled - SSH key only"
 fi
 
 # Apply userconf if it exists (for new Raspberry Pi OS versions)
-if [[ -f /boot/userconf ]]; then
+if [[ -f "$BOOT_DIR/userconf" ]]; then
     log "Applying user configuration"
     # This is handled by Raspberry Pi OS automatically
+fi
+
+# Run Telegram bootstrap if present
+if [[ -f "$BOOT_DIR/telegram-bootstrap.sh" ]]; then
+    log "Running Telegram bootstrap..."
+    bash "$BOOT_DIR/telegram-bootstrap.sh" || log "Telegram bootstrap failed"
 fi
 
 log "=== First Boot Setup Complete ==="
 
 # Remove this script so it doesn't run again
-rm -f /boot/firstboot-setup.sh
+rm -f "$BOOT_DIR/firstboot-setup.sh"
 
 # Create a marker file
 touch /var/lib/firstboot-complete
@@ -322,6 +458,16 @@ main() {
     fi
 
     log_info "Boot partition: $BOOT_MOUNT"
+
+    # Create custom.toml for Bookworm+ if enabled
+    if ! create_custom_toml "$BOOT_MOUNT"; then
+        die "Failed to create custom.toml"
+    fi
+
+    # Ensure firstboot handler runs when using custom.toml
+    if ! configure_firstboot_cmdline "$BOOT_MOUNT"; then
+        log_warning "Failed to configure firstboot handler, continuing anyway"
+    fi
 
     # Create WiFi configuration
     if ! create_wpa_supplicant "$BOOT_MOUNT"; then

@@ -55,6 +55,11 @@ validate_config() {
         ((errors++))
     fi
 
+    # Validate user configuration
+    if ! validate_user_config; then
+        ((errors++))
+    fi
+
     if [[ $errors -gt 0 ]]; then
         log_error "Configuration validation failed with $errors error(s)"
         return 1
@@ -240,6 +245,35 @@ validate_hostname() {
     fi
 
     return 0
+}
+
+# Validate user configuration for headless setup
+validate_user_config() {
+    local errors=0
+    local user="${DEFAULT_USER:-}"
+
+    if [[ -z "$user" ]]; then
+        log_error "DEFAULT_USER is not set"
+        ((errors++))
+    elif [[ ! "$user" =~ ^[a-z][a-z0-9-]{0,30}$ ]]; then
+        log_error "DEFAULT_USER must start with a letter and contain only lowercase letters, digits, and hyphens"
+        ((errors++))
+    fi
+
+    if [[ "${USE_CUSTOM_TOML:-true}" == "true" ]]; then
+        if [[ -z "${USER_PASSWORD:-}" && -z "${USER_PASSWORD_HASH:-}" ]]; then
+            log_error "USER_PASSWORD or USER_PASSWORD_HASH is required when USE_CUSTOM_TOML=true"
+            ((errors++))
+        elif [[ -n "${USER_PASSWORD:-}" && ${#USER_PASSWORD} -lt 8 ]]; then
+            log_warning "USER_PASSWORD is less than 8 characters"
+        fi
+
+        if [[ -n "${USER_PASSWORD_HASH:-}" && ! "${USER_PASSWORD_HASH}" =~ ^\\$6\\$ ]]; then
+            log_warning "USER_PASSWORD_HASH does not look like a SHA-512 crypt hash (\$6$)"
+        fi
+    fi
+
+    return $errors
 }
 
 # ==============================================================================

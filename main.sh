@@ -100,6 +100,12 @@ print_config_summary() {
     log_info "  WiFi country: ${WIFI_COUNTRY_CODE:-<not set>}"
     log_info "  Hostname: ${HOSTNAME:-raspberrypi}"
     log_info "  Default user: ${DEFAULT_USER:-pi}"
+    if [[ -n "${USER_PASSWORD:-}" || -n "${USER_PASSWORD_HASH:-}" ]]; then
+        log_info "  User password: set"
+    else
+        log_info "  User password: <not set>"
+    fi
+    log_info "  Use custom.toml: ${USE_CUSTOM_TOML:-true}"
     log_info "  DHCP: ${USE_DHCP:-true}"
 
     if [[ "${USE_DHCP:-true}" != "true" ]]; then
@@ -123,6 +129,38 @@ print_config_summary() {
         log_info "  Telegram bot token: $(mask_secret "${TELEGRAM_BOT_TOKEN:-}")"
         log_info "  Telegram chat ID: ${TELEGRAM_CHAT_ID:-<not set>}"
     fi
+}
+
+# Ensure USER_PASSWORD is set for headless Bookworm setup
+ensure_user_password() {
+    if [[ "${USE_CUSTOM_TOML:-true}" != "true" ]]; then
+        return 0
+    fi
+
+    if [[ -n "${USER_PASSWORD:-}" ]]; then
+        log_info "Using USER_PASSWORD from config"
+        return 0
+    fi
+
+    if [[ -n "${USER_PASSWORD_HASH:-}" ]]; then
+        log_info "USER_PASSWORD not set; using USER_PASSWORD_HASH"
+        return 0
+    fi
+
+    log_warning "USER_PASSWORD is empty; generating a random password"
+
+    local generated
+    if command_exists openssl; then
+        generated=$(openssl rand -base64 18 | tr -d '\n')
+    else
+        generated=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 20)
+    fi
+
+    USER_PASSWORD="$generated"
+    export USER_PASSWORD
+
+    log_warning "Generated USER_PASSWORD: $USER_PASSWORD"
+    log_warning "Save this password for SSH login"
 }
 
 # ==============================================================================
@@ -175,6 +213,8 @@ main() {
     # ==============================================================================
     # Step 2: Validate Configuration
     # ==============================================================================
+
+    ensure_user_password
 
     if ! validate_config; then
         die "Configuration validation failed"
